@@ -2,4 +2,6 @@
 <config>
 	<logoutput>true</logoutput>
 	<logfilepath>C:\logfilepath</logfilepath>
+	<querydir>...</querydir>
+	<queryextension>.key</queryextension>
 </config>

@@ -14,6 +14,8 @@ using System.Web;
 
 using System.Threading;
 
+using IthacaKeyServer.RequestProcessing;
+
 
 namespace IthacaKeyServer
 {
@@ -23,6 +25,7 @@ namespace IthacaKeyServer
         Fatal,
         Warning,
         Status,
+        Info,       /* Normal informational messages */
         Verbose,    /* For extra informational messages */
         Debug       /* For debug messages */
     }
@@ -40,7 +43,7 @@ namespace IthacaKeyServer
         // Verbose
         static bool verboseFlag = false;
 
-        // Quiet (overrides verbose messages)
+        // Quiet (hides verbose messages and info messages)
         static bool quietFlag = false;
 
         // Silent (suppresses everything except errors)
@@ -52,11 +55,16 @@ namespace IthacaKeyServer
         // Set if help is to be printed
         static bool helpFlag = false;
 
+        // If debug is enabled, debug messages print no matter what.
+        static bool debugFlag = false;
+
         // Exit Code
         static int exitCode = 0;
 
         static void Main(string[] args)
         {
+            PrintMsg("Starting Application.", MessageType.Status);
+
             SetOptionFlags(args);
 
             if (helpFlag)
@@ -70,7 +78,7 @@ namespace IthacaKeyServer
 
             try
             {
-                string prefixString = "http://+:" + portNumber.ToString();
+                string prefixString = "http://+:" + portNumber.ToString() + "/";
 
                 // Accept all requests sent to port 8080.
                 httpListener.Prefixes.Add(prefixString);
@@ -85,54 +93,61 @@ namespace IthacaKeyServer
 
                 PrintExceptionMsg(e);
                 PrintExitMsg(exitCode);
+                Console.ReadLine();
                 return;
             }
 
             PrintMsg("HTTP Listener has begun listening for requests.", MessageType.Status);
 
-            // Request processing loop
-            while (exitCode == 0)
+            using (RequestProcessingManager processor = new RequestProcessingManager(ProcessRequest))
             {
-                httpListener.BeginGetContext(HttpCallback, httpListener);
-            }
 
+                // Request processing loop
+                while (exitCode == 0)
+                {
+                    try
+                    {
+                        HttpListenerContext context = httpListener.GetContext();
+                        
+                        // Create new Request object
+                        KeyAuthRequest request = new KeyAuthRequest(context);
+                        
+                        // Queue it
+                        processor.QueueWorkItem(request);
+                    }
+                    catch (Exception e)
+                    {
+                        PrintExceptionMsg(e);
+                        PrintMsg("Continuing...", MessageType.Status);
+                    }
+                }
 
-        }
-
-
-        static void HttpCallback(IAsyncResult result)
-        {
-            try
-            {
-                if (!result.IsCompleted)
-                    result.AsyncWaitHandle.WaitOne();
-
-                HttpListenerContext context = ((HttpListener)result.AsyncState).EndGetContext(result);
-                ProcessRequest(context);
-
-                // Clean Up
-                result.AsyncWaitHandle.Close();
-            }
-            catch (Exception e)
-            {
-                exitCode = 1;
-                PrintExceptionMsg(e);
-                PrintExitMsg(exitCode);
-                return;
             }
         }
 
-        static void ProcessRequest(HttpListenerContext context)
+        static void ProcessRequest(object state)
         {
-            Stream responseStream = context.Response.OutputStream;
-
-            if (context.Request.HttpMethod != "GET")
+            lock (state)
             {
-                context.Response.StatusCode = (int)HttpStatusCode.MethodNotAllowed;
-                byte[] response = Encoding.UTF8.GetBytes(FormHttpErrorResponse("Method Not Allowed", context.Response.StatusCode));
-                responseStream.Write(response, 0, response.Length);
-                responseStream.Close();
-                return;
+                KeyAuthRequest request = (KeyAuthRequest)state;
+                HttpListenerContext context = request.Context;
+
+                // Print information about the request if verbose is enabled:
+                PrintMsg("Is Local: " + context.Request.IsLocal, MessageType.Verbose);
+                PrintMsg("HTTP Method: " + context.Request.HttpMethod, MessageType.Info);
+
+                Stream responseStream = context.Response.OutputStream;
+
+                if (context.Request.HttpMethod == "GET")
+                {
+                    PrintMsg("This HTTP Method is not allowed on this server", MessageType.Info);
+                    PrintMsg("Sending Error response...", MessageType.Info);
+                    context.Response.StatusCode = (int)HttpStatusCode.MethodNotAllowed;
+                    byte[] response = Encoding.UTF8.GetBytes(FormHttpErrorResponse("Method Not Allowed", context.Response.StatusCode));
+                    responseStream.Write(response, 0, response.Length);
+                    responseStream.Close();
+                    return;
+                }
             }
 
         }
@@ -146,6 +161,14 @@ namespace IthacaKeyServer
         // Prints a formatted message
         static void PrintMsg(string msg, MessageType type)
         {
+            // If debug is enabled, debug messages print no matter what.
+
+            if (quietFlag && (type == MessageType.Info || type == MessageType.Verbose)) return;
+            if (silentFlag && (type == MessageType.Warning || type == MessageType.Status)) return;
+
+            if (!verboseFlag && type == MessageType.Verbose) return;
+            if (!debugFlag && type == MessageType.Debug) return;
+
             string msgTypeStr = string.Empty;
             switch (type)
             {
@@ -167,6 +190,9 @@ namespace IthacaKeyServer
                 case MessageType.Verbose:
                     msgTypeStr = "INFO";
                     break;
+                case MessageType.Info:
+                    msgTypeStr = "INFO";
+                    break;
             }
 
             Console.WriteLine(string.Format("[{0}] {1}: {2}", msgTypeStr, DateTime.Now.ToString(), msg));
@@ -180,6 +206,10 @@ namespace IthacaKeyServer
         static void PrintExceptionMsg(Exception e)
         {
             PrintMsg(e.Message, MessageType.Error);
+            
+            if (e.InnerException != null)
+                PrintMsg("Inner Exception: " + e.InnerException.Message, MessageType.Debug);
+
             PrintMsg("SOURCE: " + e.Source, MessageType.Debug);
             PrintMsg("STACK TRACE: " + e.StackTrace, MessageType.Debug);
         }
@@ -194,6 +224,14 @@ namespace IthacaKeyServer
                 {
                     case CLOptions.Help:
                         helpFlag = true;
+                        break;
+                    case CLOptions.Debug:
+                        debugFlag = true;
+                        break;
+                    case CLOptions.Verbose:
+                        verboseFlag = true;
+                        break;
+                    default:
                         break;
                 }
             }
@@ -225,6 +263,10 @@ Options:
         If no path is specified, it writes to keyserv_log.txt.
   --help, -h
         Prints this message.
+  --log:<FILE>
+        Sets the log file to be used. This can also be set in config.xml
+  --config:<OPTION>:<VALUE>
+        Sets a config option before the server starts
 
 Notes:
   --quiet and --very-quiet both suppress debug messages, but all messages, printed or not can be logged with --log-output.
