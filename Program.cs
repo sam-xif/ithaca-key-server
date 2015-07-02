@@ -62,7 +62,6 @@ namespace IthacaKeyServer
             if (helpFlag)
             {
                 Usage();
-                Console.ReadLine();
                 return;
             }
 
