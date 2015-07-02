@@ -119,6 +119,7 @@ namespace IthacaKeyServer
                 exitCode = 1;
                 PrintExceptionMsg(e);
                 PrintExitMsg(exitCode);
+                return;
             }
         }
 
