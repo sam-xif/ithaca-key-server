@@ -1,7 +1,12 @@
 ﻿<?xml version="1.0" encoding="utf-8" ?>
 <config>
 	<logoutput>true</logoutput>
-	<logfilepath>C:\logfilepath</logfilepath>
-	<querydir>...</querydir>
+	<logfile>C:\logfilepath</logfile>
+	<querydir>./keydata</querydir>
 	<queryextension>.key</queryextension>
+	<port>80</port>
+	
+	<!-- An example list. They have a specific syntax because im lazy and don't want to code stuff.
+		The list cannot have spaces around it, and there can be no spaces around the semicolons separating them.-->
+	<exclude>cache;data</exclude>
 </config>
