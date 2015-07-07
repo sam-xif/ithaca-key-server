@@ -1,4 +1,13 @@
-﻿using System;
+﻿
+// Define the debug directive. Undefine this for release builds.
+#define DEBUG
+
+// Define the symbol that tells the program to generate keys
+// Will be used until a way to send a request to generate more keys is created.
+// (Change to define when keys need to be added)
+#undef ADDKEYS
+
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -35,17 +44,18 @@ namespace IthacaKeyServer
     {
         // Global vars
 
-        static string version = "0.1.0";
+        static string version = "1.0.0";
 
         static Configuration config;
 
-        // Files
-        static FileStream logFile;
-        static FileStream userFile;
-        static FileStream keyFile;
+        // File Paths
+        static string logFilePath;
+
+        // Key Manager
+        static KeyFileManager keyMgr;
 
         // Port Number
-        static int portNumber = 80;
+        static int portNumber;
 
         // Verbose
         static bool verboseFlag = false;
@@ -72,6 +82,7 @@ namespace IthacaKeyServer
         {
             PrintMsg("\n\n\tStarting Ithaca Key Validation Service v" + version + ".\n", MessageType.Status);
 
+#if DEBUG
             if (File.Exists("config.xml"))
             {
                 File.Delete("config.xml");
@@ -82,13 +93,32 @@ namespace IthacaKeyServer
                 File.Copy("..\\..\\config.xml", "config.xml");
             }
 
+#else
+
+            if (!File.Exists("config.xml")) 
+            {
+                exitCode = 1;
+                PrintMsg("No config.xml found. Cannot proceed.", MessageType.Fatal);
+                PrintExitMsg(exitCode);
+                return;
+            }
+
+#endif
             config = new Configuration();
             using (FileStream fs = File.OpenRead("config.xml"))
             {
                 config.ParseConfigXml(fs);
             }
 
-            PrintMsg("Configuring settings...", MessageType.Status);
+            logFlag = (bool)config.GetConfigValue("logoutput");
+            if (logFlag)
+            {
+                logFilePath = (string)config.GetConfigValue("logfile");
+                if (!File.Exists(logFilePath)) File.Create(logFilePath).Close();
+                PrintMsg("Opening log file at " + logFilePath, MessageType.Status);
+            }
+
+            PrintMsg("Setting configuration variables...", MessageType.Status);
             string[] unmatched = SetOptionFlags(args);
             for (int i = 0; i < unmatched.Length; i++)
             {
@@ -116,6 +146,23 @@ namespace IthacaKeyServer
                 }
             }
 
+            string keyFilePath = (string)config.GetConfigValue("keyfile");
+            if (!File.Exists(keyFilePath)) File.Create(keyFilePath).Close();
+            keyMgr = new KeyFileManager(keyFilePath);
+
+#if ADDKEYS
+            keyMgr.CreateKeys(128, "You have been whitelisted on the server!");
+#endif
+
+            try
+            {
+                keyMgr.BuildKeyHashtable();
+            }
+            catch (Exception e)
+            {
+                PrintExceptionMsg(e);
+            }
+
             if (helpFlag)
             {
                 Usage();
@@ -141,7 +188,7 @@ namespace IthacaKeyServer
                 exitCode = 1;
 
                 PrintExceptionMsg(e);
-                PrintExitMsg(exitCode);
+                PrintExitMsg();
                 return;
             }
 
@@ -170,6 +217,7 @@ namespace IthacaKeyServer
                     }
                 }
 
+                keyMgr.Close();
             }
         }
 
@@ -245,7 +293,7 @@ namespace IthacaKeyServer
                         {
                             if (key.Name == "key")
                             {
-                                keys.Add(key.Value);
+                                keys.Add(key.FirstChild.Value);
                             }
                         }
                     }
@@ -264,18 +312,46 @@ namespace IthacaKeyServer
 
                 // Now, match against files:
 
-                // For now, just return OK:
-                PrintMsg("Client sent correct key successfully", MessageType.Verbose);
-                PrintMsg("Sending response...", MessageType.Verbose);
-                context.Response.StatusCode = (int)HttpStatusCode.OK;
-                context.Response.StatusDescription = "OK";
-                context.Response.Headers["Content-Type"] = "text/xml";
-                response = Encoding.UTF8.GetBytes("<keyResponse><status>OK</status><message>Key Matched Successfully!</message></keyResponse>");
-                context.Response.KeepAlive = false;
-                context.Response.ContentLength64 = response.Length;
-                responseStream.Write(response, 0, response.Length);
-                context.Response.Close();
+                // GetKeyDesc checks if a key exists, gets its description, and returns it. It returns string.Empty if the key doesn't exist.
+                string desc = string.Empty;
+                try
+                {
+                    desc = keyMgr.GetKeyDesc(keys[0]);
+                }
+                catch (Exception e)
+                {
+                    PrintExceptionMsg(e);
+                }
+                if (desc != string.Empty)
+                {
 
+                    // For now, just return OK:
+                    PrintMsg("Client sent correct key successfully", MessageType.Verbose);
+                    PrintMsg("Sending response...", MessageType.Verbose);
+                    context.Response.StatusCode = (int)HttpStatusCode.OK;
+                    context.Response.StatusDescription = "OK";
+                    context.Response.Headers["Content-Type"] = "text/xml";
+                    // TODO: Insert a description of what the key unlocks in the <desc> tag.
+                    response = Encoding.UTF8.GetBytes("<keyResponse><status>OK</status><message>Key Matched Successfully!</message><desc>" 
+                        + desc + "</desc></keyResponse>");
+                    context.Response.KeepAlive = false;
+                    context.Response.ContentLength64 = response.Length;
+                    responseStream.Write(response, 0, response.Length);
+                    context.Response.Close();
+                }
+                else
+                {
+                    PrintMsg("Client sent nonexistent key", MessageType.Verbose);
+                    PrintMsg("Sending response...", MessageType.Verbose);
+                    context.Response.StatusCode = (int)HttpStatusCode.OK;
+                    context.Response.StatusDescription = "OK";
+                    context.Response.Headers["Content-Type"] = "text/xml";
+                    response = Encoding.UTF8.GetBytes("<keyResponse><status>NONEXISTENT</status><message>Sorry, but the given key does not exist.</message></keyResponse>");
+                    context.Response.KeepAlive = false;
+                    context.Response.ContentLength64 = response.Length;
+                    responseStream.Write(response, 0, response.Length);
+                    context.Response.Close();
+                }
             }
 
         }
@@ -300,12 +376,13 @@ namespace IthacaKeyServer
         // Prints a formatted message
         static void PrintMsg(string msg, MessageType type)
         {
-            // If debug is enabled, debug messages print no matter what.
 
             if (quietFlag && (type == MessageType.Info || type == MessageType.Verbose)) return;
             if (silentFlag && (type == MessageType.Warning || type == MessageType.Status)) return;
 
             if (!verboseFlag && type == MessageType.Verbose) return;
+
+            // If debug is enabled, debug messages print no matter what.
             if (!debugFlag && type == MessageType.Debug) return;
 
             string msgTypeStr = string.Empty;
@@ -334,10 +411,22 @@ namespace IthacaKeyServer
                     break;
             }
 
-            Console.WriteLine(string.Format("[{0}] {1}: {2}", msgTypeStr, DateTime.Now.ToString(), msg));
+            string write = string.Format("[{0}] {1}: {2}", msgTypeStr, DateTime.Now.ToString(), msg);
+            Console.WriteLine(write);
+            if (logFlag)
+            {
+                using (FileStream fs = File.Open(logFilePath, FileMode.Append, FileAccess.Write))
+                {
+                    using (StreamWriter sw = new StreamWriter(fs))
+                    {
+                        sw.WriteLine(write);
+                        sw.Flush();
+                    }
+                }
+            }
         }
 
-        static void PrintExitMsg(int code)
+        static void PrintExitMsg()
         {
             PrintMsg("Exiting with code " + exitCode.ToString(), MessageType.Status);
         }
@@ -358,6 +447,8 @@ namespace IthacaKeyServer
 
 
         // Sets option flags, and returns an array of unmatched options.
+        // TODO: Integrate config here too. Possibly change all options to config options then
+        // set the bool flags based on the Configuration object, without the string[] args.
         static string[] SetOptionFlags(string[] args)
         {
             List<string> unmatchedArgs = new List<string>();

@@ -1,10 +1,11 @@
 ﻿<?xml version="1.0" encoding="utf-8" ?>
 <config>
 	<logoutput>true</logoutput>
-	<logfile>C:\logfilepath</logfile>
+	<logfile>keyauthserver.log</logfile>
 	<querydir>./keydata</querydir>
 	<queryextension>.key</queryextension>
-	<port>80</port>
+	<keyfile>keys</keyfile>
+	<port>8080</port>
 	
 	<!-- An example list. They have a specific syntax because im lazy and don't want to code stuff.
 		The list cannot have spaces around it, and there can be no spaces around the semicolons separating them.-->

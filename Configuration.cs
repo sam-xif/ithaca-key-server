@@ -181,7 +181,7 @@ namespace IthacaKeyServer.Config
                     }
                     else if (typeAttributeVal == "string")
                     {
-                        type = ConvarType.Integer;
+                        type = ConvarType.String;
                         typeSet = true;
                     }
                     else if (typeAttributeVal == "bool")

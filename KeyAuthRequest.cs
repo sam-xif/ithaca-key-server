@@ -44,8 +44,6 @@ namespace IthacaKeyServer
     // An object that holds request data
     public class KeyAuthRequest : IRequestObject
     {
-
-        private KeyFileManager m_keyFileMgr;
         private HttpListenerContext m_context;
         private ProcessorThreadInfo m_threadInfo;
         private bool m_disposed;
