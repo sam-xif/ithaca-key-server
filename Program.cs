@@ -7,6 +7,9 @@
 // (Change to define when keys need to be added)
 #undef ADDKEYS
 
+// For linux stuff
+#define LINUX
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -83,6 +86,17 @@ namespace IthacaKeyServer
             PrintMsg("\n\n\tStarting Ithaca Key Validation Service v" + version + ".\n", MessageType.Status);
 
 #if DEBUG
+#if LINUX
+	    if (File.Exists("config.xml"))
+            {
+                File.Delete("config.xml");
+                File.Copy("../../config.xml", "config.xml");
+            }
+            else
+            {
+                File.Copy("../../config.xml", "config.xml");
+            }
+#else
             if (File.Exists("config.xml"))
             {
                 File.Delete("config.xml");
@@ -92,6 +106,7 @@ namespace IthacaKeyServer
             {
                 File.Copy("..\\..\\config.xml", "config.xml");
             }
+#endif
 
 #else
 
