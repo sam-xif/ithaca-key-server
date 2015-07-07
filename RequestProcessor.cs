@@ -39,6 +39,7 @@ namespace IthacaKeyServer.RequestProcessing
 
     public class RequestProcessingManager : IDisposable
     {
+
         // Member variables:
         private ThreadSafeQueue<IRequestObject> m_requestQueue;
         private int m_capacity = 128;
@@ -47,14 +48,16 @@ namespace IthacaKeyServer.RequestProcessing
         private uint m_idCounter = 0;
         private bool m_disposed = false;
 
+        // When set to false, the thread stops.
+        // When set to true by Main(), work continues because there are queued requests.
+        // The purpose is to save CPU when there are no requests waiting.
+        private ManualResetEvent m_continueWork;
+
         // May not be needed
         private int m_numWorkerThreads;
 
         private Thread m_dequeueThread;
 
-        /*
-         * The callback function must begin with a Semaphore.WaitOne().
-         */
         private RequestCallback m_callback;
 
 
@@ -64,6 +67,7 @@ namespace IthacaKeyServer.RequestProcessing
 
             m_requestQueue = new ThreadSafeQueue<IRequestObject>();
             m_pool = new Semaphore(0, m_capacity);
+            m_continueWork = new ManualResetEvent(false);
 
             StartDequeueThread();
         }
@@ -76,6 +80,7 @@ namespace IthacaKeyServer.RequestProcessing
 
             m_requestQueue = new ThreadSafeQueue<IRequestObject>();
             m_pool = new Semaphore(0, m_capacity);
+            m_continueWork = new ManualResetEvent(false);
 
             StartDequeueThread();
         }
@@ -90,12 +95,22 @@ namespace IthacaKeyServer.RequestProcessing
         {
             while (!m_stopFlag)
             {
+                lock (m_continueWork)
+                {
+                    if (m_numWorkerThreads == 0)
+                    {
+                        m_continueWork.Reset();
+                    }
+
+                    m_continueWork.WaitOne();
+                }
+
                 if (m_numWorkerThreads > 0)
                 {
                     // Dequeues a requests, waits for it to complete, and moves on to the next one.
                     IRequestObject request = m_requestQueue.Dequeue();
                     request.ThreadInfo.Handle.WaitOne();
-                    m_numWorkerThreads--;
+                    Interlocked.Decrement(ref m_numWorkerThreads);
                 }
             }
 
@@ -140,7 +155,10 @@ namespace IthacaKeyServer.RequestProcessing
                     Thread.Sleep(200);
                     m_pool.Release();
 
-                    m_numWorkerThreads++;
+                    if (m_numWorkerThreads == 0)
+                        m_continueWork.Set();
+
+                    Interlocked.Increment(ref m_numWorkerThreads);
                     return true;
                 }
                 return false;

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.IO;
 
 using System.Threading;
 
@@ -13,24 +14,38 @@ using IthacaKeyServer.RequestProcessing;
 
 namespace IthacaKeyServer
 {
+
+    // Don't really need this structure
+
+    /*
     public struct Key
     {
         public string KeyData;
+        public string KeyDesc;
+
+        public Key(string data, string desc)
+        {
+            this.KeyData = data;
+            this.KeyDesc = desc;
+        }
+
+        public override int GetHashCode()
+        {
+            return KeyData.GetHashCode() ^ KeyDesc.GetHashCode();
+        }
+
+        public override bool Equals(object obj)
+        {
+            return KeyData.Equals(((Key)obj).KeyData) && KeyDesc.Equals(((Key)obj).KeyDesc);
+        }
     }
+    */
 
-
+    // An object that holds request data
     public class KeyAuthRequest : IRequestObject
     {
 
-        public Key[] Keys
-        {
-            get
-            {
-                return m_keys;
-            }
-        }
-
-        private Key[] m_keys;
+        private KeyFileManager m_keyFileMgr;
         private HttpListenerContext m_context;
         private ProcessorThreadInfo m_threadInfo;
         private bool m_disposed;
@@ -50,13 +65,6 @@ namespace IthacaKeyServer
         public KeyAuthRequest(HttpListenerContext context)
         {
             this.m_context = context;
-            //ParseRequest();
-        }
-
-        private void ParseRequest()
-        {
-            if (!m_context.Request.HasEntityBody)
-                throw new Exception("Error: Request has no body.", new Exception("XML Body required for GET method in this server."));
         }
 
         public void Close()

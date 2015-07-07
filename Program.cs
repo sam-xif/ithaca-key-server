@@ -15,6 +15,7 @@ using System.Web;
 using System.Threading;
 
 using IthacaKeyServer.RequestProcessing;
+using IthacaKeyServer.Config;
 
 
 namespace IthacaKeyServer
@@ -34,8 +35,14 @@ namespace IthacaKeyServer
     {
         // Global vars
 
-        // Log file
+        static string version = "0.1.0";
+
+        static Configuration config;
+
+        // Files
         static FileStream logFile;
+        static FileStream userFile;
+        static FileStream keyFile;
 
         // Port Number
         static int portNumber = 80;
@@ -63,9 +70,51 @@ namespace IthacaKeyServer
 
         static void Main(string[] args)
         {
-            PrintMsg("Starting Application.", MessageType.Status);
+            PrintMsg("\n\n\tStarting Ithaca Key Validation Service v" + version + ".\n", MessageType.Status);
 
-            SetOptionFlags(args);
+            if (File.Exists("config.xml"))
+            {
+                File.Delete("config.xml");
+                File.Copy("..\\..\\config.xml", "config.xml");
+            }
+            else
+            {
+                File.Copy("..\\..\\config.xml", "config.xml");
+            }
+
+            config = new Configuration();
+            using (FileStream fs = File.OpenRead("config.xml"))
+            {
+                config.ParseConfigXml(fs);
+            }
+
+            PrintMsg("Configuring settings...", MessageType.Status);
+            string[] unmatched = SetOptionFlags(args);
+            for (int i = 0; i < unmatched.Length; i++)
+            {
+                string opt = unmatched[i];
+                opt = opt.TrimStart('-');
+                string[] optSects = opt.Split(':');
+                if (optSects.Length == 2)
+                {
+                    // It takes the form --name:val
+                    string name = optSects[0];
+                    string val = optSects[1];
+                    config.SetConfigValue(name, val);
+                }
+                else if (optSects.Length == 3 && optSects[0] == "config")
+                {
+                    // It takes the form --config:name:val
+                    string name = optSects[1];
+                    string val = optSects[2];
+                    config.SetConfigValue(name, val);
+                }
+                else
+                {
+                    PrintMsg("Unknown option '" + unmatched[i] + "'. Use --help for usage", MessageType.Fatal);
+                    return;
+                }
+            }
 
             if (helpFlag)
             {
@@ -74,7 +123,7 @@ namespace IthacaKeyServer
             }
 
             HttpListener httpListener = new HttpListener();
-            portNumber = 8080;
+            portNumber = (int)config.GetConfigValue("port");
 
             try
             {
@@ -93,7 +142,6 @@ namespace IthacaKeyServer
 
                 PrintExceptionMsg(e);
                 PrintExitMsg(exitCode);
-                Console.ReadLine();
                 return;
             }
 
@@ -138,18 +186,109 @@ namespace IthacaKeyServer
 
                 Stream responseStream = context.Response.OutputStream;
 
-                if (context.Request.HttpMethod == "GET")
+                // Allowed methods are GET and OPTIONS
+                byte[] response;
+
+                if (context.Request.HttpMethod != "POST" && context.Request.HttpMethod != "OPTIONS")
                 {
                     PrintMsg("This HTTP Method is not allowed on this server", MessageType.Info);
                     PrintMsg("Sending Error response...", MessageType.Info);
                     context.Response.StatusCode = (int)HttpStatusCode.MethodNotAllowed;
-                    byte[] response = Encoding.UTF8.GetBytes(FormHttpErrorResponse("Method Not Allowed", context.Response.StatusCode));
+                    response = Encoding.UTF8.GetBytes(FormHttpErrorResponse("Method Not Allowed", context.Response.StatusCode));
                     responseStream.Write(response, 0, response.Length);
-                    responseStream.Close();
+                    context.Response.Close();
                     return;
                 }
+
+                if (context.Request.HttpMethod == "OPTIONS") { SendOptions(context); return; }
+
+                if (!context.Request.HasEntityBody)
+                {
+                    PrintMsg("Client Error: Client Sent Badly formed request", MessageType.Info);
+                    PrintMsg("\tThe request does not contain an XML body.", MessageType.Info);
+                    PrintMsg("Sending Error response...", MessageType.Info);
+                    context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+                    response = Encoding.UTF8.GetBytes(FormHttpErrorResponse("Bad Request", context.Response.StatusCode));
+                    responseStream.Write(response, 0, response.Length);
+                    context.Response.Close();
+                    return;
+                }
+
+                List<string> keys = new List<string>();
+                string userName = string.Empty;
+
+                using (Stream input = context.Request.InputStream)
+                {
+                    XmlDocument doc = new XmlDocument();
+                    doc.Load(input);
+
+                    XmlNode root = doc.FirstChild;
+
+                    // Begin Parsing
+                    if (!(root.Name == "keyRequest"))
+                    {
+                        PrintMsg("Client Sent Badly formed request", MessageType.Info);
+                        PrintMsg("Sending Error response...", MessageType.Info);
+                        context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+                        response = Encoding.UTF8.GetBytes(FormHttpErrorResponse("Bad Request", context.Response.StatusCode));
+                        responseStream.Write(response, 0, response.Length);
+                        context.Response.Close();
+                        return;
+                    }
+
+                    try 
+                    {
+                        XmlNode userCreds = root["credentials"];
+                        userName = userCreds["username"].FirstChild.Value;
+                        XmlNode keyNode = root["keys"];
+                        foreach (XmlNode key in keyNode.ChildNodes)
+                        {
+                            if (key.Name == "key")
+                            {
+                                keys.Add(key.Value);
+                            }
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        PrintExceptionMsg(e);
+                        PrintMsg("Client Sent Badly formed request", MessageType.Info);
+                        PrintMsg("Sending Error response...", MessageType.Info);
+                        context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+                        response = Encoding.UTF8.GetBytes(FormHttpErrorResponse("Bad Request", context.Response.StatusCode));
+                        responseStream.Write(response, 0, response.Length);
+                        context.Response.Close();
+                        return;
+                    }
+                }
+
+                // Now, match against files:
+
+                // For now, just return OK:
+                PrintMsg("Client sent correct key successfully", MessageType.Verbose);
+                PrintMsg("Sending response...", MessageType.Verbose);
+                context.Response.StatusCode = (int)HttpStatusCode.OK;
+                context.Response.StatusDescription = "OK";
+                context.Response.Headers["Content-Type"] = "text/xml";
+                response = Encoding.UTF8.GetBytes("<keyResponse><status>OK</status><message>Key Matched Successfully!</message></keyResponse>");
+                context.Response.KeepAlive = false;
+                context.Response.ContentLength64 = response.Length;
+                responseStream.Write(response, 0, response.Length);
+                context.Response.Close();
+
             }
 
+        }
+
+        static void SendOptions(HttpListenerContext context)
+        {
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            context.Response.Headers["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+            context.Response.Headers["Access-Control-Max-Age"] = "1000";
+            context.Response.Headers["Access-Control-Allow-Headers"] = "origin, content-type, accept";
+            context.Response.StatusCode = (int)HttpStatusCode.OK;
+            context.Response.StatusDescription = "OK";
+            context.Response.Close();
         }
 
         static string FormHttpErrorResponse(string errorMsg, int errorCode)
@@ -205,8 +344,11 @@ namespace IthacaKeyServer
 
         static void PrintExceptionMsg(Exception e)
         {
-            PrintMsg(e.Message, MessageType.Error);
-            
+            if (exitCode == 0) // Non-fatal
+                PrintMsg(e.Message, MessageType.Error);
+            else
+                PrintMsg(e.Message, MessageType.Fatal);
+
             if (e.InnerException != null)
                 PrintMsg("Inner Exception: " + e.InnerException.Message, MessageType.Debug);
 
@@ -215,8 +357,10 @@ namespace IthacaKeyServer
         }
 
 
-        static void SetOptionFlags(string[] args)
+        // Sets option flags, and returns an array of unmatched options.
+        static string[] SetOptionFlags(string[] args)
         {
+            List<string> unmatchedArgs = new List<string>();
             for (int i = 0; i < args.Length; i++)
             {
                 CLOptions opt = CLOptionUtil.GetOptionFromString(args[i]);
@@ -231,10 +375,22 @@ namespace IthacaKeyServer
                     case CLOptions.Verbose:
                         verboseFlag = true;
                         break;
+                    case CLOptions.GenerateLogFile:
+                        logFlag = true;
+                        break;
+                    case CLOptions.Quiet:
+                        quietFlag = true;
+                        break;
+                    case CLOptions.VeryQuiet:
+                        silentFlag = true;
+                        break;
                     default:
+                        unmatchedArgs.Add(args[i]);
                         break;
                 }
+
             }
+            return unmatchedArgs.ToArray();
         }
 
 
@@ -263,10 +419,13 @@ Options:
         If no path is specified, it writes to keyserv_log.txt.
   --help, -h
         Prints this message.
-  --log:<FILE>
-        Sets the log file to be used. This can also be set in config.xml
-  --config:<OPTION>:<VALUE>
-        Sets a config option before the server starts
+  --config:<OPTION>:<VALUE> or --<OPTION>:<VALUE>
+        Sets a config option before the server starts.
+  Examples:
+    --logfile:<FILE>
+          Sets the log file to be used. Equivalent to --config:logfile:<FILE>
+    --port:<PORT-NUM>
+          Sets the port number. Equivalent to --config:port:<PORT-NUM>
 
 Notes:
   --quiet and --very-quiet both suppress debug messages, but all messages, printed or not can be logged with --log-output.
